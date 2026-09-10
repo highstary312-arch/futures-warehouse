@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>期货仓单日报 · 全品种（每日更新）</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif; background:#f2f4f8; color:#1f2937; }
+  header { background:linear-gradient(135deg,#0f2a5c,#1e4a9c); color:#fff; padding:22px 28px; }
+  header h1 { font-size:22px; margin-bottom:6px; }
+  header .sub { font-size:12.5px; opacity:.75; }
+  .badge { display:inline-block; padding:3px 10px; border-radius:20px; font-size:12px; margin-left:10px; vertical-align:2px; }
+  .b-live { background:#22c55e; } .b-snap { background:#f59e0b; } .b-err { background:#ef4444; }
+  .btn { background:#fff; color:#1e4a9c; border:none; padding:7px 16px; border-radius:6px; cursor:pointer; font-size:13px; font-weight:600; }
+  .btn:disabled { opacity:.6; cursor:default; }
+  .wrap { max-width:1280px; margin:0 auto; padding:20px; }
+  .cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:14px; margin-bottom:18px; }
+  .card { background:#fff; border-radius:12px; padding:16px 18px; box-shadow:0 1px 3px rgba(0,0,0,.06); }
+  .card .t { font-size:12.5px; color:#6b7280; margin-bottom:6px; }
+  .card .v { font-size:24px; font-weight:700; }
+  .tabs { display:flex; gap:8px; margin-bottom:14px; flex-wrap:wrap; }
+  .tab { background:#fff; border:1px solid #e5e7eb; padding:8px 20px; border-radius:8px; cursor:pointer; font-size:14px; }
+  .tab.on { background:#1e4a9c; color:#fff; border-color:#1e4a9c; }
+  .panel { background:#fff; border-radius:12px; padding:18px; box-shadow:0 1px 3px rgba(0,0,0,.06); }
+  .toolbar { display:flex; gap:10px; margin-bottom:14px; flex-wrap:wrap; align-items:center; }
+  input[type=text], select { padding:7px 12px; border:1px solid #d1d5db; border-radius:6px; font-size:13.5px; }
+  .chip { padding:5px 14px; border-radius:16px; border:1px solid #d1d5db; cursor:pointer; font-size:12.5px; background:#fff; }
+  .chip.on { background:#1e4a9c; color:#fff; border-color:#1e4a9c; }
+  table { width:100%; border-collapse:collapse; font-size:13.5px; }
+  th { text-align:left; padding:10px 8px; color:#6b7280; font-weight:600; border-bottom:2px solid #e5e7eb; cursor:pointer; user-select:none; white-space:nowrap; }
+  th:hover { color:#1e4a9c; }
+  td { padding:9px 8px; border-bottom:1px solid #f3f4f6; }
+  tr:hover td { background:#f8fafc; }
+  .up { color:#dc2626; font-weight:600; } .down { color:#059669; font-weight:600; } .flat { color:#9ca3af; }
+  .num { font-variant-numeric:tabular-nums; }
+  canvas.chart { width:100%; height:320px; display:block; }
+  .note { font-size:12px; color:#9ca3af; margin-top:10px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>期货仓单日报 · 全品种<span id="badge" class="badge b-snap">快照数据</span></h1>
+  <div class="sub">
+    数据源：东方财富数据中心（源自上期所/上期能源/大商所/郑商所/广期所每日仓单日报） ·
+    快照时间：<span id="snapTime"></span> ·
+    <button class="btn" id="refreshBtn" onclick="refreshAll()">刷新最新数据</button>
+    <span id="refreshInfo" style="margin-left:8px;font-size:12px;opacity:.8"></span>
+  </div>
+</header>
+<div class="wrap">
+  <div class="cards">
+    <div class="card"><div class="t">最新交易日</div><div class="v" id="stDate">-</div></div>
+    <div class="card"><div class="t">覆盖品种</div><div class="v" id="stCount">-</div></div>
+    <div class="card"><div class="t">当日仓单净增减合计</div><div class="v num" id="stNet">-</div></div>
+    <div class="card"><div class="t">增仓 / 减仓品种</div><div class="v num" id="stUpDown">-</div></div>
+  </div>
+  <div class="tabs">
+    <div class="tab on" data-tab="overview" onclick="switchTab('overview')">总览（最新一日）</div>
+    <div class="tab" data-tab="bydate" onclick="switchTab('bydate')">按日期浏览</div>
+    <div class="tab" data-tab="detail" onclick="switchTab('detail')">品种详情与走势</div>
+  </div>
+
+  <div class="panel" id="panel-overview">
+    <div class="toolbar">
+      <input type="text" id="filterText" placeholder="搜索品种名或代码…" oninput="renderOverview()">
+      <span id="exChips"></span>
+    </div>
+    <div style="overflow-x:auto"><table id="tblOverview"></table></div>
+  </div>
+
+  <div class="panel" id="panel-bydate" style="display:none">
+    <div class="toolbar">
+      选择交易日：<select id="dateSel" onchange="renderByDate()"></select>
+      <span class="note" style="margin:0">（交易所一般在结算后 16:00~17:30 发布当日仓单日报）</span>
+    </div>
+    <div style="overflow-x:auto"><table id="tblByDate"></table></div>
+  </div>
+
+  <div class="panel" id="panel-detail" style="display:none">
+    <div class="toolbar">
+      选择品种：<select id="prodSel" onchange="renderDetail()"></select>
+      <span id="prodInfo" class="note" style="margin:0"></span>
+    </div>
+    <canvas class="chart" id="chart"></canvas>
+    <div class="note">柱：每日增减（右轴） ｜ 线：仓单量（左轴）</div>
+    <div style="overflow-x:auto;margin-top:10px"><table id="tblDetail"></table></div>
+  </div>
+  <div class="note">提示：打开本页面时会自动联网拉取最新数据（交易所约17:00后发布当日数据），每日 17:00 后访问即为最新。</div>
+</div>
+
+<script src="data.js"></script>
+<script>
+let DATA = JSON.parse(JSON.stringify(window.SNAPSHOT.products));
+const API = "https://datacenter-web.eastmoney.com/api/data/v1/get";
+const state = { tab:'overview', sortKey:'c', sortDir:-1, ex:'全部', text:'', date:null, prod:null };
+
+const fmt = n => n==null ? '-' : Number(n).toLocaleString('zh-CN');
+const chgHtml = c => c==null ? '<span class="flat">-</span>'
+  : c>0 ? `<span class="up">+${fmt(c)}</span>` : c<0 ? `<span class="down">${fmt(c)}</span>` : '<span class="flat">0</span>';
+const esc = s => String(s).replace(/[&<>"]/g, m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));
+
+function allDates(){ const s=new Set(); Object.values(DATA).forEach(p=>p.rows.forEach(r=>s.add(r.d))); return [...s].sort(); }
+function latestDate(){ return allDates().slice(-1)[0]; }
+function rowsByDate(p){ const m={}; p.rows.forEach(r=>m[r.d]=r); return m; }
+
+function init(){
+  document.getElementById('snapTime').textContent = window.SNAPSHOT.generated;
+  initChips();
+  const ds = allDates();
+  document.getElementById('dateSel').innerHTML = ds.map(d=>`<option>${d}</option>`).join('');
+  document.getElementById('dateSel').value = state.date = ds[ds.length-1];
+  const groups = {};
+  Object.entries(DATA).forEach(([c,p])=>{ (groups[p.mkt]=groups[p.mkt]||[]).push([c,p]); });
+  document.getElementById('prodSel').innerHTML = Object.entries(groups).map(([m,arr])=>
+    `<optgroup label="${m}">${arr.map(([c,p])=>`<option value="${c}">${p.name} ${c}</option>`).join('')}</optgroup>`).join('');
+  state.prod = document.getElementById('prodSel').value;
+  renderStats(); renderOverview();
+  try{
+    const cache = JSON.parse(localStorage.getItem('fwr_cache')||'null');
+    if(cache && Date.now()-cache.time < 6*3600*1000){ DATA = cache.products; afterDataUpdate('已加载本地缓存'); }
+  }catch(e){}
+  refreshAll();
+}
+function initChips(){
+  const exs = ['全部', ...new Set(Object.values(DATA).map(p=>p.mkt))];
+  document.getElementById('exChips').innerHTML = exs.map(e=>
+    `<span class="chip ${e===state.ex?'on':''}" onclick="state.ex='${e}';initChips();renderOverview()">${e}</span>`).join(' ');
+}
+
+function switchTab(t){
+  state.tab=t;
+  document.querySelectorAll('.tab').forEach(el=>el.classList.toggle('on', el.dataset.tab===t));
+  ['overview','bydate','detail'].forEach(x=>document.getElementById('panel-'+x).style.display = x===t?'block':'none');
+  if(t==='overview') renderOverview();
+  if(t==='bydate') renderByDate();
+  if(t==='detail') renderDetail();
+}
+
+function renderStats(){
+  const d = latestDate(); let net=0, up=0, dn=0, n=0;
+  Object.values(DATA).forEach(p=>{ const r=rowsByDate(p)[d]; if(r){ n++; net+=r.c||0; if(r.c>0)up++; else if(r.c<0)dn++; }});
+  document.getElementById('stDate').textContent = d;
+  document.getElementById('stCount').textContent = n;
+  document.getElementById('stNet').innerHTML = chgHtml(net);
+  document.getElementById('stUpDown').innerHTML = `<span class="up">${up}</span> / <span class="down">${dn}</span>`;
+}
+
+function sparkline(rows){
+  const vals = rows.slice(-28).map(r=>r.v); if(vals.length<2) return '';
+  const w=110,h=28,mn=Math.min(...vals),mx=Math.max(...vals),rg=(mx-mn)||1;
+  const pts = vals.map((v,i)=>`${(i/(vals.length-1)*w).toFixed(1)},${(h-3-(v-mn)/rg*(h-6)).toFixed(1)}`).join(' ');
+  return `<svg width="${w}" height="${h}"><polyline points="${pts}" fill="none" stroke="#1e4a9c" stroke-width="1.5"/></svg>`;
+}
+
+function renderOverview(){
+  state.text = document.getElementById('filterText').value.trim().toLowerCase();
+  const d = latestDate(); const ds = allDates();
+  const d0 = ds[0];
+  let arr = [];
+  Object.entries(DATA).forEach(([c,p])=>{
+    if(state.ex!=='全部' && p.mkt!==state.ex) return;
+    if(state.text && !(p.name.toLowerCase().includes(state.text)||c.toLowerCase().includes(state.text))) return;
+    const m = rowsByDate(p); const r = m[d]; if(!r) return;
+    let s5=0; ds.slice(-5).forEach(x=>{ if(m[x]) s5+=m[x].c||0; });
+    const m0 = m[d0];
+    arr.push({c, name:p.name, mkt:p.mkt, v:r.v, c1:r.c, s5, sm: m0? r.v-m0.v : null, rows:p.rows});
+  });
+  const k = state.sortKey, dir = state.sortDir;
+  arr.sort((a,b)=>{
+    const av = a[k]==null ? (k==='sm'? -Infinity : 0) : a[k];
+    const bv = b[k]==null ? (k==='sm'? -Infinity : 0) : b[k];
+    return (av-bv)*dir || String(a.c).localeCompare(String(b.c));
+  });
+  const heads = [['name','品种'],['c','代码'],['mkt','交易所'],['v','最新仓单'],['c1','日增减'],['s5','近5日累计'],['sm','近一月累计'],['tr','近一月趋势']];
+  let html = '<thead><tr>'+heads.map(([key,label])=>{
+    const sk = key==='tr' ? 'v' : key;
+    return `<th onclick="sortBy('${sk}')">${label}${k===sk?(dir>0?' ▲':' ▼'):''}</th>`;
+  }).join('')+'</tr></thead><tbody>';
+  arr.forEach(a=>{
+    html += `<tr><td>${esc(a.name)}</td><td class="num">${a.c}</td><td>${a.mkt}</td>
+      <td class="num">${fmt(a.v)}</td><td class="num">${chgHtml(a.c1)}</td>
+      <td class="num">${chgHtml(a.s5)}</td><td class="num">${a.sm==null?'-':chgHtml(a.sm)}</td>
+      <td>${sparkline(a.rows)}</td></tr>`;
+  });
+  document.getElementById('tblOverview').innerHTML = html + '</tbody>';
+}
+function sortBy(k){ if(state.sortKey===k) state.sortDir*=-1; else { state.sortKey=k; state.sortDir=-1; } renderOverview(); }
+
+function renderByDate(){
+  const d = document.getElementById('dateSel').value; state.date=d;
+  let arr=[];
+  Object.entries(DATA).forEach(([c,p])=>{ const r=rowsByDate(p)[d]; if(r) arr.push({c,name:p.name,mkt:p.mkt,v:r.v,c1:r.c}); });
+  arr.sort((a,b)=>b.c1-a.c1);
+  let html='<thead><tr><th>品种</th><th>代码</th><th>交易所</th><th>仓单量</th><th>较前一交易日增减</th></tr></thead><tbody>';
+  arr.forEach(a=>{ html+=`<tr><td>${esc(a.name)}</td><td class="num">${a.c}</td><td>${a.mkt}</td><td class="num">${fmt(a.v)}</td><td class="num">${chgHtml(a.c1)}</td></tr>`; });
+  document.getElementById('tblByDate').innerHTML = html+'</tbody>';
+}
+
+function renderDetail(){
+  const c = document.getElementById('prodSel').value; state.prod=c;
+  const p = DATA[c]; if(!p) return;
+  const rows = [...p.rows].sort((a,b)=>a.d.localeCompare(b.d));
+  const first=rows[0], last=rows[rows.length-1];
+  document.getElementById('prodInfo').textContent =
+    `${p.mkt} · 最新 ${fmt(last.v)}（${last.d}）· 当日 ${(last.c||0)>0?'+':''}${fmt(last.c)} · 区间累计 ${last.v-first.v>0?'+':''}${fmt(last.v-first.v)}`;
+  drawChart(rows);
+  let html='<thead><tr><th>日期</th><th>仓单量</th><th>增减</th><th>区间累计</th></tr></thead><tbody>';
+  rows.forEach(r=>{ html+=`<tr><td class="num">${r.d}</td><td class="num">${fmt(r.v)}</td><td class="num">${chgHtml(r.c)}</td><td class="num">${chgHtml(r.v-first.v)}</td></tr>`; });
+  document.getElementById('tblDetail').innerHTML = html+'</tbody>';
+}
+
+function drawChart(rows){
+  const cv = document.getElementById('chart');
+  const dpr = window.devicePixelRatio||1;
+  const W = cv.clientWidth, H = 320;
+  if(!W) return;
+  cv.width=W*dpr; cv.height=H*dpr;
+  const ctx = cv.getContext('2d'); ctx.scale(dpr,dpr); ctx.clearRect(0,0,W,H);
+  const padL=64,padR=64,padT=20,padB=36, iw=W-padL-padR, ih=H-padT-padB;
+  const vals=rows.map(r=>r.v), chgs=rows.map(r=>r.c||0);
+  const vMn=Math.min(...vals)*0.98, vMx=Math.max(...vals)*1.02||1;
+  const cMx=Math.max(...chgs.map(Math.abs),1);
+  const x=i=>padL+iw*i/(rows.length-1||1);
+  const yV=v=>padT+ih-(v-vMn)/((vMx-vMn)||1)*ih;
+  const yC=v=>padT+ih/2-(v/cMx)*(ih/2-8);
+  ctx.font='11px sans-serif'; ctx.fillStyle='#9ca3af'; ctx.strokeStyle='#e5e7eb';
+  for(let g=0;g<=4;g++){
+    const y=padT+ih*g/4;
+    ctx.beginPath();ctx.moveTo(padL,y);ctx.lineTo(padL+iw,y);ctx.stroke();
+    ctx.textAlign='right'; ctx.fillText(fmt(Math.round(vMx-(vMx-vMn)*g/4)), padL-6, y+4);
+    ctx.textAlign='left';  ctx.fillText(fmt(Math.round(cMx-(2*cMx)*g/4)), padL+iw+6, y+4);
+  }
+  ctx.fillStyle='#e5e7eb'; ctx.fillRect(padL, yC(0)-0.5, iw, 1);
+  rows.forEach((r,i)=>{ const bx=x(i), bw=Math.max(2, iw/rows.length*0.55);
+    ctx.fillStyle = r.c>0 ? '#dc2626' : '#059669';
+    const y0=yC(0), y1=yC(r.c||0);
+    ctx.fillRect(bx-bw/2, Math.min(y0,y1), bw, Math.abs(y1-y0)||1);
+  });
+  ctx.beginPath(); ctx.strokeStyle='#1e4a9c'; ctx.lineWidth=2;
+  rows.forEach((r,i)=> i? ctx.lineTo(x(i),yV(r.v)) : ctx.moveTo(x(i),yV(r.v)));
+  ctx.stroke();
+  ctx.fillStyle='#1e4a9c';
+  rows.forEach((r,i)=>{ ctx.beginPath(); ctx.arc(x(i),yV(r.v),2.4,0,7); ctx.fill(); });
+  ctx.fillStyle='#9ca3af'; ctx.textAlign='center';
+  rows.forEach((r,i)=>{ if(i%Math.ceil(rows.length/8)===0||i===rows.length-1) ctx.fillText(r.d.slice(5), x(i), H-12); });
+}
+
+async function refreshAll(){
+  const btn=document.getElementById('refreshBtn'), info=document.getElementById('refreshInfo'), badge=document.getElementById('badge');
+  btn.disabled=true; badge.className='badge b-snap'; badge.textContent='实时刷新中…';
+  const since=new Date(); since.setMonth(since.getMonth()-1);
+  const sinceStr = since.toISOString().slice(0,10);
+  const codes=Object.keys(DATA); let done=0, ok=0;
+  const run = async code=>{
+    const filter=`(SECURITY_CODE="${code}")(TRADE_DATE>='${sinceStr}')`;
+    const url=`${API}?reportName=RPT_FUTU_STOCKDATA&columns=SECURITY_CODE,TRADE_DATE,ON_WARRANT_NUM,ADDCHANGE&filter=${encodeURIComponent(filter)}&pageNumber=1&pageSize=500&sortTypes=1&sortColumns=TRADE_DATE&source=WEB&client=WEB`;
+    const ctl=new AbortController(); const t=setTimeout(()=>ctl.abort(),12000);
+    try{
+      const r=await fetch(url,{signal:ctl.signal}); const j=await r.json();
+      const rows=(j.result&&j.result.data)||[];
+      if(rows.length){ ok++;
+        const m={}; (DATA[code].rows||[]).forEach(rr=>m[rr.d]=rr);
+        rows.forEach(rr=>m[rr.TRADE_DATE.slice(0,10)]={d:rr.TRADE_DATE.slice(0,10),v:rr.ON_WARRANT_NUM,c:rr.ADDCHANGE});
+        DATA[code].rows=Object.values(m).sort((a,b)=>a.d.localeCompare(b.d));
+      }
+    }catch(e){} finally{ clearTimeout(t); done++; info.textContent=`刷新中 ${done}/${codes.length}…`; }
+  };
+  const q=[...codes];
+  await Promise.all(Array.from({length:6},async()=>{ while(q.length) await run(q.pop()); }));
+  btn.disabled=false;
+  if(ok>0){
+    afterDataUpdate(`已更新 ${ok} 个品种 · ${new Date().toLocaleString('zh-CN')}`);
+    try{ localStorage.setItem('fwr_cache', JSON.stringify({time:Date.now(), products:DATA})); }catch(e){}
+  } else {
+    badge.className='badge b-err'; badge.textContent='实时刷新失败，显示快照';
+    info.textContent='网络无法访问数据源，已显示最近快照数据';
+  }
+}
+function afterDataUpdate(msg){
+  document.getElementById('badge').className='badge b-live';
+  document.getElementById('badge').textContent='实时数据';
+  document.getElementById('refreshInfo').textContent=msg;
+  const ds=allDates(), sel=document.getElementById('dateSel');
+  sel.innerHTML=ds.map(d=>`<option>${d}</option>`).join('');
+  sel.value=state.date||ds[ds.length-1];
+  renderStats(); switchTab(state.tab);
+}
+window.addEventListener('resize', ()=>{ if(state.tab==='detail') renderDetail(); });
+init();
+</script>
+</body>
+</html>
