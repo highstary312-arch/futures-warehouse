@@ -92,6 +92,8 @@
 <script src="data.js"></script>
 <script>
 let DATA = JSON.parse(JSON.stringify(window.SNAPSHOT.products));
+if(!DATA['sc']) DATA['sc']={name:'原油',mkt:'上期能源',rows:[]};
+if(!DATA['FU']) DATA['FU']={name:'燃油',mkt:'上期所',rows:[]};
 const API = "https://datacenter-web.eastmoney.com/api/data/v1/get";
 const state = { tab:'overview', sortKey:'c', sortDir:-1, ex:'全部', text:'', date:null, prod:null };
 
@@ -160,7 +162,9 @@ function renderOverview(){
   let arr = [];
   Object.entries(DATA).forEach(([c,p])=>{
     if(state.ex!=='全部' && p.mkt!==state.ex) return;
-    if(state.text && !(p.name.toLowerCase().includes(state.text)||c.toLowerCase().includes(state.text))) return;
+    const ALIAS={PG:['lpg','液化气'],sc:['sc'],FU:['fu','燃料油']};
+    const keys=[p.name.toLowerCase(),c.toLowerCase(),...(ALIAS[c]||[])];
+    if(state.text && !keys.some(k=>k.includes(state.text))) return;
     const m = rowsByDate(p); const r = m[d]; if(!r) return;
     let s5=0; ds.slice(-5).forEach(x=>{ if(m[x]) s5+=m[x].c||0; });
     const m0 = m[d0];
@@ -253,7 +257,7 @@ async function refreshAll(){
   const sinceStr = since.toISOString().slice(0,10);
   const codes=Object.keys(DATA); let done=0, ok=0;
   const run = async code=>{
-    const filter=`(SECURITY_CODE="${code}")(TRADE_DATE>='${sinceStr}')`;
+    const filter=`(SECURITY_CODE="${code}")(TRADE_DATE>='${code==='FU'?'2020-01-01':sinceStr}')`;
     const url=`${API}?reportName=RPT_FUTU_STOCKDATA&columns=SECURITY_CODE,TRADE_DATE,ON_WARRANT_NUM,ADDCHANGE&filter=${encodeURIComponent(filter)}&pageNumber=1&pageSize=500&sortTypes=1&sortColumns=TRADE_DATE&source=WEB&client=WEB`;
     const ctl=new AbortController(); const t=setTimeout(()=>ctl.abort(),12000);
     try{
