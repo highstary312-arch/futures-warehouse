@@ -36,6 +36,7 @@
   .num { font-variant-numeric:tabular-nums; }
   canvas.chart { width:100%; height:320px; display:block; }
   .note { font-size:12px; color:#9ca3af; margin-top:10px; }
+  .stale { color:#d97706; font-size:12px; }
 </style>
 </head>
 <body>
@@ -50,20 +51,20 @@
 </header>
 <div class="wrap">
   <div class="cards">
-    <div class="card"><div class="t">最新交易日</div><div class="v" id="stDate">-</div></div>
+    <div class="card"><div class="t">数据最新交易日</div><div class="v" id="stDate">-</div></div>
     <div class="card"><div class="t">覆盖品种</div><div class="v" id="stCount">-</div></div>
     <div class="card"><div class="t">当日仓单净增减合计</div><div class="v num" id="stNet">-</div></div>
     <div class="card"><div class="t">增仓 / 减仓品种</div><div class="v num" id="stUpDown">-</div></div>
   </div>
   <div class="tabs">
-    <div class="tab on" data-tab="overview" onclick="switchTab('overview')">总览（最新一日）</div>
+    <div class="tab on" data-tab="overview" onclick="switchTab('overview')">总览（各品种最新）</div>
     <div class="tab" data-tab="bydate" onclick="switchTab('bydate')">按日期浏览</div>
     <div class="tab" data-tab="detail" onclick="switchTab('detail')">品种详情与走势</div>
   </div>
 
   <div class="panel" id="panel-overview">
     <div class="toolbar">
-      <input type="text" id="filterText" placeholder="搜索品种名或代码…" oninput="renderOverview()">
+      <input type="text" id="filterText" placeholder="搜索品种名或代码（如 LPG、原油）…" oninput="renderOverview()">
       <span id="exChips"></span>
     </div>
     <div style="overflow-x:auto"><table id="tblOverview"></table></div>
@@ -79,22 +80,26 @@
 
   <div class="panel" id="panel-detail" style="display:none">
     <div class="toolbar">
-      选择品种：<select id="prodSel" onchange="renderDetail()"></select>
+      <input type="text" id="prodFilter" placeholder="筛选品种…" oninput="renderProdSel()">
+      <select id="prodSel" onchange="renderDetail()"></select>
       <span id="prodInfo" class="note" style="margin:0"></span>
     </div>
     <canvas class="chart" id="chart"></canvas>
     <div class="note">柱：每日增减（右轴） ｜ 线：仓单量（左轴）</div>
     <div style="overflow-x:auto;margin-top:10px"><table id="tblDetail"></table></div>
   </div>
-  <div class="note">提示：打开本页面时会自动联网拉取最新数据（交易所约17:00后发布当日数据），每日 17:00 后访问即为最新。</div>
+  <div class="note">提示：打开本页面时会自动联网拉取最新数据（交易所约17:00后发布当日数据），每日 17:00 后访问即为最新。总览表中每个品种显示其各自最新一天的数据（见"数据日期"列）。</div>
 </div>
 
 <script src="data.js"></script>
 <script>
 let DATA = JSON.parse(JSON.stringify(window.SNAPSHOT.products));
+// 补充东财品种代码表遗漏的品种（若快照中已有则跳过）
 if(!DATA['sc']) DATA['sc']={name:'原油',mkt:'上期能源',rows:[]};
 if(!DATA['FU']) DATA['FU']={name:'燃油',mkt:'上期所',rows:[]};
+if(!DATA['AO']) DATA['AO']={name:'氧化铝',mkt:'上期所',rows:[]};
 const API = "https://datacenter-web.eastmoney.com/api/data/v1/get";
+const ALIAS = {PG:['lpg','液化气'],sc:['sc','原油'],FU:['fu','燃料油'],bc:['bc','国际铜'],nr:['nr','20号胶'],lu:['lu','低硫燃料油']};
 const state = { tab:'overview', sortKey:'c', sortDir:-1, ex:'全部', text:'', date:null, prod:null };
 
 const fmt = n => n==null ? '-' : Number(n).toLocaleString('zh-CN');
@@ -102,9 +107,9 @@ const chgHtml = c => c==null ? '<span class="flat">-</span>'
   : c>0 ? `<span class="up">+${fmt(c)}</span>` : c<0 ? `<span class="down">${fmt(c)}</span>` : '<span class="flat">0</span>';
 const esc = s => String(s).replace(/[&<>"]/g, m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));
 
-function allDates(){ const s=new Set(); Object.values(DATA).forEach(p=>p.rows.forEach(r=>s.add(r.d))); return [...s].sort(); }
-function latestDate(){ return allDates().slice(-1)[0]; }
-function rowsByDate(p){ const m={}; p.rows.forEach(r=>m[r.d]=r); return m; }
+function allDates(){ const s=new Set(); Object.values(DATA).forEach(p=>(p.rows||[]).forEach(r=>s.add(r.d))); return [...s].sort(); }
+function rowsByDate(p){ const m={}; (p.rows||[]).forEach(r=>m[r.d]=r); return m; }
+function lastRow(p){ return (p.rows&&p.rows.length)? p.rows[p.rows.length-1] : null; }
 
 function init(){
   document.getElementById('snapTime').textContent = window.SNAPSHOT.generated;
@@ -112,10 +117,7 @@ function init(){
   const ds = allDates();
   document.getElementById('dateSel').innerHTML = ds.map(d=>`<option>${d}</option>`).join('');
   document.getElementById('dateSel').value = state.date = ds[ds.length-1];
-  const groups = {};
-  Object.entries(DATA).forEach(([c,p])=>{ (groups[p.mkt]=groups[p.mkt]||[]).push([c,p]); });
-  document.getElementById('prodSel').innerHTML = Object.entries(groups).map(([m,arr])=>
-    `<optgroup label="${m}">${arr.map(([c,p])=>`<option value="${c}">${p.name} ${c}</option>`).join('')}</optgroup>`).join('');
+  renderProdSel();
   state.prod = document.getElementById('prodSel').value;
   renderStats(); renderOverview();
   try{
@@ -129,6 +131,20 @@ function initChips(){
   document.getElementById('exChips').innerHTML = exs.map(e=>
     `<span class="chip ${e===state.ex?'on':''}" onclick="state.ex='${e}';initChips();renderOverview()">${e}</span>`).join(' ');
 }
+function renderProdSel(){
+  const q = (document.getElementById('prodFilter').value||'').trim().toLowerCase();
+  const groups = {};
+  Object.entries(DATA).forEach(([c,p])=>{
+    const keys=[p.name.toLowerCase(),c.toLowerCase(),...(ALIAS[c]||[])];
+    if(q && !keys.some(k=>k.includes(q))) return;
+    (groups[p.mkt]=groups[p.mkt]||[]).push([c,p]);
+  });
+  const sel = document.getElementById('prodSel');
+  const prev = sel.value;
+  sel.innerHTML = Object.entries(groups).map(([m,arr])=>
+    `<optgroup label="${m}">${arr.map(([c,p])=>`<option value="${c}">${p.name} ${c}</option>`).join('')}</optgroup>`).join('');
+  if(prev && DATA[prev]) sel.value = prev;
+}
 
 function switchTab(t){
   state.tab=t;
@@ -140,9 +156,14 @@ function switchTab(t){
 }
 
 function renderStats(){
-  const d = latestDate(); let net=0, up=0, dn=0, n=0;
-  Object.values(DATA).forEach(p=>{ const r=rowsByDate(p)[d]; if(r){ n++; net+=r.c||0; if(r.c>0)up++; else if(r.c<0)dn++; }});
-  document.getElementById('stDate').textContent = d;
+  let net=0, up=0, dn=0, n=0; const ds={};
+  Object.values(DATA).forEach(p=>{
+    const r = lastRow(p); if(!r) return;
+    n++; net+=r.c||0; ds[r.d]=(ds[r.d]||0)+1;
+    if(r.c>0)up++; else if(r.c<0)dn++;
+  });
+  const best = Object.keys(ds).sort((a,b)=>(ds[b]-ds[a])||a.localeCompare(b))[0];
+  document.getElementById('stDate').textContent = best||'-';
   document.getElementById('stCount').textContent = n;
   document.getElementById('stNet').innerHTML = chgHtml(net);
   document.getElementById('stUpDown').innerHTML = `<span class="up">${up}</span> / <span class="down">${dn}</span>`;
@@ -157,18 +178,17 @@ function sparkline(rows){
 
 function renderOverview(){
   state.text = document.getElementById('filterText').value.trim().toLowerCase();
-  const d = latestDate(); const ds = allDates();
-  const d0 = ds[0];
+  const ds = allDates(); const d0 = ds[0];
   let arr = [];
   Object.entries(DATA).forEach(([c,p])=>{
+    const r = lastRow(p); if(!r) return;
     if(state.ex!=='全部' && p.mkt!==state.ex) return;
-    const ALIAS={PG:['lpg','液化气'],sc:['sc'],FU:['fu','燃料油']};
     const keys=[p.name.toLowerCase(),c.toLowerCase(),...(ALIAS[c]||[])];
     if(state.text && !keys.some(k=>k.includes(state.text))) return;
-    const m = rowsByDate(p); const r = m[d]; if(!r) return;
-    let s5=0; ds.slice(-5).forEach(x=>{ if(m[x]) s5+=m[x].c||0; });
+    const m = rowsByDate(p);
+    let s5=0; p.rows.slice(-5).forEach(x=>{ s5+=x.c||0; });
     const m0 = m[d0];
-    arr.push({c, name:p.name, mkt:p.mkt, v:r.v, c1:r.c, s5, sm: m0? r.v-m0.v : null, rows:p.rows});
+    arr.push({c, name:p.name, mkt:p.mkt, date:r.d, v:r.v, c1:r.c, s5, sm: m0? r.v-m0.v : null, rows:p.rows});
   });
   const k = state.sortKey, dir = state.sortDir;
   arr.sort((a,b)=>{
@@ -176,13 +196,13 @@ function renderOverview(){
     const bv = b[k]==null ? (k==='sm'? -Infinity : 0) : b[k];
     return (av-bv)*dir || String(a.c).localeCompare(String(b.c));
   });
-  const heads = [['name','品种'],['c','代码'],['mkt','交易所'],['v','最新仓单'],['c1','日增减'],['s5','近5日累计'],['sm','近一月累计'],['tr','近一月趋势']];
+  const heads = [['name','品种'],['c','代码'],['mkt','交易所'],['date','数据日期'],['v','最新仓单'],['c1','日增减'],['s5','近5日累计'],['sm','近一月累计'],['tr','近一月趋势']];
   let html = '<thead><tr>'+heads.map(([key,label])=>{
     const sk = key==='tr' ? 'v' : key;
     return `<th onclick="sortBy('${sk}')">${label}${k===sk?(dir>0?' ▲':' ▼'):''}</th>`;
   }).join('')+'</tr></thead><tbody>';
   arr.forEach(a=>{
-    html += `<tr><td>${esc(a.name)}</td><td class="num">${a.c}</td><td>${a.mkt}</td>
+    html += `<tr><td>${esc(a.name)}</td><td class="num">${a.c}</td><td>${a.mkt}</td><td class="num">${a.date}</td>
       <td class="num">${fmt(a.v)}</td><td class="num">${chgHtml(a.c1)}</td>
       <td class="num">${chgHtml(a.s5)}</td><td class="num">${a.sm==null?'-':chgHtml(a.sm)}</td>
       <td>${sparkline(a.rows)}</td></tr>`;
@@ -202,12 +222,20 @@ function renderByDate(){
 }
 
 function renderDetail(){
-  const c = document.getElementById('prodSel').value; state.prod=c;
+  const sel = document.getElementById('prodSel');
+  const c = sel.value; state.prod=c;
   const p = DATA[c]; if(!p) return;
-  const rows = [...p.rows].sort((a,b)=>a.d.localeCompare(b.d));
+  const rows = [...(p.rows||[])].sort((a,b)=>a.d.localeCompare(b.d));
+  if(!rows.length){
+    document.getElementById('prodInfo').textContent = '该品种暂无仓单数据';
+    document.getElementById('tblDetail').innerHTML='';
+    const cv=document.getElementById('chart'); cv.getContext('2d').clearRect(0,0,cv.width,cv.height);
+    return;
+  }
   const first=rows[0], last=rows[rows.length-1];
+  const staleNote = (last.d < allDates().slice(-1)[0]) ? ` · ⚠️ 数据停更于 ${last.d}` : '';
   document.getElementById('prodInfo').textContent =
-    `${p.mkt} · 最新 ${fmt(last.v)}（${last.d}）· 当日 ${(last.c||0)>0?'+':''}${fmt(last.c)} · 区间累计 ${last.v-first.v>0?'+':''}${fmt(last.v-first.v)}`;
+    `${p.mkt} · 最新 ${fmt(last.v)}（${last.d}）· 当日 ${(last.c||0)>0?'+':''}${fmt(last.c)} · 区间累计 ${last.v-first.v>0?'+':''}${fmt(last.v-first.v)}${staleNote}`;
   drawChart(rows);
   let html='<thead><tr><th>日期</th><th>仓单量</th><th>增减</th><th>区间累计</th></tr></thead><tbody>';
   rows.forEach(r=>{ html+=`<tr><td class="num">${r.d}</td><td class="num">${fmt(r.v)}</td><td class="num">${chgHtml(r.c)}</td><td class="num">${chgHtml(r.v-first.v)}</td></tr>`; });
@@ -257,7 +285,8 @@ async function refreshAll(){
   const sinceStr = since.toISOString().slice(0,10);
   const codes=Object.keys(DATA); let done=0, ok=0;
   const run = async code=>{
-    const filter=`(SECURITY_CODE="${code}")(TRADE_DATE>='${code==='FU'?'2020-01-01':sinceStr}')`;
+    const sinceCode = (code==='FU') ? '2020-01-01' : sinceStr;  // 燃油东财停更于2025年底，需拉全历史
+    const filter=`(SECURITY_CODE="${code}")(TRADE_DATE>='${sinceCode}')`;
     const url=`${API}?reportName=RPT_FUTU_STOCKDATA&columns=SECURITY_CODE,TRADE_DATE,ON_WARRANT_NUM,ADDCHANGE&filter=${encodeURIComponent(filter)}&pageNumber=1&pageSize=500&sortTypes=1&sortColumns=TRADE_DATE&source=WEB&client=WEB`;
     const ctl=new AbortController(); const t=setTimeout(()=>ctl.abort(),12000);
     try{
@@ -288,6 +317,7 @@ function afterDataUpdate(msg){
   const ds=allDates(), sel=document.getElementById('dateSel');
   sel.innerHTML=ds.map(d=>`<option>${d}</option>`).join('');
   sel.value=state.date||ds[ds.length-1];
+  renderProdSel();
   renderStats(); switchTab(state.tab);
 }
 window.addEventListener('resize', ()=>{ if(state.tab==='detail') renderDetail(); });
